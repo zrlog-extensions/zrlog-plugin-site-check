@@ -3,6 +3,7 @@ package com.zrlog.plugin.sitecheck;
 import com.zrlog.plugin.RunConstants;
 import com.zrlog.plugin.common.PluginNativeImageUtils;
 import com.zrlog.plugin.sitecheck.controller.SiteCheckController;
+import com.zrlog.plugin.sitecheck.service.SiteCheckConfig;
 import com.zrlog.plugin.sitecheck.service.SiteCheckService;
 import com.zrlog.plugin.type.RunType;
 
@@ -21,7 +22,8 @@ public class GraalvmAgentApplication {
                 SiteCheckService.HealthCheckRecord.class,
                 SiteCheckService.HealthCheckIssue.class,
                 SiteCheckService.HealthCheckSample.class,
-                SiteCheckService.HealthCheckSuggestion.class
+                SiteCheckService.HealthCheckSuggestion.class,
+                SiteCheckConfig.class
         ));
         String basePath = System.getProperty("user.dir").replace("\\target", "").replace("/target", "");
         File file = new File(basePath + "/src/main/resources");

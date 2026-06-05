@@ -3,9 +3,11 @@ package com.zrlog.plugin.sitecheck.service;
 import com.google.gson.Gson;
 import com.hibegin.common.dao.DataSourceWrapperImpl;
 import com.zrlog.plugin.IOSession;
+import com.zrlog.plugin.client.HttpClientUtils;
 import com.zrlog.plugin.common.PathKit;
 import com.zrlog.plugin.common.SessionKvRepository;
 import com.zrlog.plugin.common.model.BlogRunTime;
+import com.zrlog.plugin.common.model.PublicInfo;
 import com.zrlog.plugin.data.codec.ContentType;
 import com.zrlog.plugin.type.ActionType;
 import org.jsoup.Jsoup;
@@ -14,9 +16,11 @@ import org.jsoup.nodes.Element;
 
 import java.io.File;
 import java.io.IOException;
+import java.net.URI;
 import java.sql.SQLException;
 import java.text.DecimalFormat;
 import java.text.SimpleDateFormat;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -37,7 +41,10 @@ import java.util.regex.Pattern;
 public class SiteCheckService {
 
     private static final String LAST_RESULT_KEY = "siteCheckLastResult";
+    private static final String RECORDS_KEY = "siteCheckRecords";
     private static final int SAMPLE_LIMIT = 5;
+    private static final int RECORD_LIMIT = 10;
+    private static final int CRAWL_PAGE_LIMIT = 12;
     private static final String WEBSITE_ROUTE = "/website";
     private static final String WEBSITE_BLOG_ROUTE = "/website/blog";
     private static final String WEBSITE_OTHER_ROUTE = "/website/other";
@@ -48,7 +55,8 @@ public class SiteCheckService {
     private static final String DATABASE_OPTIMIZE_UNSUPPORTED_ENGINE = "unsupportedEngine";
     private static final String DATABASE_OPTIMIZE_UNAVAILABLE = "unavailable";
     private static final Pattern MARKDOWN_LINK_PATTERN = Pattern.compile("!?\\[[^\\]]*]\\(([^)\\s]+)(?:\\s+\"[^\"]*\")?\\)");
-    private static final String[] PUBLIC_OUTPUT_FILES = {"sitemap.xml", "rss.xml"};
+    private static final String DEFAULT_SITEMAP_URI_PATH = "/sitemap.xml";
+    private static final String DEFAULT_RSS_URI_PATH = "/rss.xml";
     private static final Gson GSON = new Gson();
 
     private final IOSession session;
@@ -61,8 +69,12 @@ public class SiteCheckService {
     public HealthCheckResult check() throws SQLException {
         ArticleHealthScanResult articleHealthScanResult = scanArticleHealth();
         BrokenLinkResult brokenLinkResult = articleHealthScanResult.brokenLinks;
-        SeoResult seoResult = articleHealthScanResult.seo;
+        PageCrawlResult pageCrawlResult = crawlSitePages(articleHealthScanResult.articleTargets);
+        SeoResult seoResult = pageCrawlResult.seo.count > 0 || pageCrawlResult.crawledCount > 0
+                ? pageCrawlResult.seo
+                : articleHealthScanResult.seo;
         IssueScanResult routeIntegrityResult = articleHealthScanResult.routeIntegrity;
+        IssueScanResult staticSiteConfigResult = inspectStaticSiteConfig();
         IssueScanResult publicOutputResult = inspectPublicOutput(articleHealthScanResult.publishedArticleCount);
         IssueScanResult robotPolicyResult = inspectRobotPolicy();
         DatabaseFragmentResult databaseFragmentResult = inspectDatabaseFragment();
@@ -74,16 +86,28 @@ public class SiteCheckService {
                     Collections.emptyList(), "publish", ARTICLE_ROUTE,
                     "存在本地资源死链", "部分文章引用了已经不存在的本地文件或附件。"));
         }
-        if (seoResult.siteMissingCount > 0 || seoResult.articleMissingCount > 0) {
-            issues.add(issue("seoMissing", "warning", seoResult.siteMissingCount + seoResult.articleMissingCount,
+        if (seoResult.count > 0) {
+            issues.add(issue("seoMissing", "warning", seoResult.count,
                     Collections.emptyList(), seoResult.samples, "search",
-                    seoResult.siteMissingCount > 0 ? WEBSITE_ROUTE : ARTICLE_ROUTE,
-                    "SEO 元信息不完整", "站点基础信息或已发布文章缺少摘要、关键字等元信息。"));
+                    seoResult.hasHomeIssue ? WEBSITE_ROUTE : ARTICLE_ROUTE,
+                    "页面 SEO 元信息不完整", "公开页面缺少 title、meta description、canonical、H1，或声明了 noindex。"));
+        }
+        if (pageCrawlResult.failure.count > 0) {
+            issues.add(issue(pageCrawlResult.crawledCount > 0 ? "pageCrawlFailed" : "pageCrawlUnavailable",
+                    pageCrawlResult.crawledCount > 0 ? "info" : "warning", pageCrawlResult.failure.count,
+                    pageCrawlResult.failure.samples, Collections.emptyList(), "search", WEBSITE_BLOG_ROUTE,
+                    pageCrawlResult.crawledCount > 0 ? "部分页面抓取失败" : "公开页面无法抓取",
+                    "页面级 SEO 检查需要抓取公开页面，失败时请确认主页地址和站点访问状态。"));
         }
         if (routeIntegrityResult.count > 0) {
             issues.add(issue("articleRoute", "warning", routeIntegrityResult.count, routeIntegrityResult.samples,
                     Collections.emptyList(), "publish", ARTICLE_ROUTE,
                     "文章访问地址异常", "部分文章别名为空、重复或与数字 ID 冲突，可能影响公开访问和跳转。"));
+        }
+        if (staticSiteConfigResult.count > 0) {
+            issues.add(issue("staticSiteConfig", "warning", staticSiteConfigResult.count, staticSiteConfigResult.samples,
+                    Collections.emptyList(), "availability", WEBSITE_BLOG_ROUTE,
+                    "静态站点配置异常", "静态化开启时需要可公开访问的主页地址，地址格式异常会影响静态页面链接生成。"));
         }
         if (robotPolicyResult.count > 0) {
             issues.add(issue("robotsPolicy", "info", robotPolicyResult.count, robotPolicyResult.samples,
@@ -109,20 +133,25 @@ public class SiteCheckService {
 
         int score = buildScore(
                 brokenLinkResult.count,
-                seoResult.siteMissingCount + seoResult.articleMissingCount,
+                seoResult.count,
                 databaseFragmentResult.fragmentValue > 0,
                 directoryWritableResult.count > 0,
                 routeIntegrityResult.count,
-                publicOutputResult.count + robotPolicyResult.count
+                publicOutputResult.count + robotPolicyResult.count,
+                staticSiteConfigResult.count,
+                pageCrawlResult.crawledCount == 0 && pageCrawlResult.failure.count > 0
         );
         HealthCheckResult result = new HealthCheckResult();
         result.checkedAt = System.currentTimeMillis();
         result.score = score;
         result.articleCount = articleHealthScanResult.articleCount;
         result.publishedArticleCount = articleHealthScanResult.publishedArticleCount;
+        result.crawledPageCount = pageCrawlResult.crawledCount;
+        result.crawlFailedPageCount = pageCrawlResult.failure.count;
         result.brokenLinkCount = brokenLinkResult.count;
-        result.seoIssueCount = seoResult.siteMissingCount + seoResult.articleMissingCount;
+        result.seoIssueCount = seoResult.count;
         result.routeIssueCount = routeIntegrityResult.count;
+        result.siteConfigIssueCount = staticSiteConfigResult.count;
         result.publicOutputIssueCount = publicOutputResult.count + robotPolicyResult.count;
         result.databaseFragmentValue = databaseFragmentResult.fragmentValue;
         result.databaseFragmentLabel = databaseFragmentResult.fragmentLabel;
@@ -144,7 +173,14 @@ public class SiteCheckService {
     }
 
     public void saveLastResult(HealthCheckResult result) {
-        SessionKvRepository.of(session).put(LAST_RESULT_KEY, GSON.toJson(result));
+        SessionKvRepository repository = SessionKvRepository.of(session);
+        repository.put(LAST_RESULT_KEY, GSON.toJson(result));
+        List<HealthCheckRecord> records = readRecords();
+        records.add(0, record(result));
+        if (records.size() > RECORD_LIMIT) {
+            records = new ArrayList<>(records.subList(0, RECORD_LIMIT));
+        }
+        repository.put(RECORDS_KEY, GSON.toJson(records));
     }
 
     public Optional<HealthCheckResult> readLastResult() {
@@ -159,26 +195,64 @@ public class SiteCheckService {
         }
     }
 
+    public List<HealthCheckRecord> readRecords() {
+        Optional<String> json = SessionKvRepository.of(session).get(RECORDS_KEY);
+        if (json.isEmpty() || !notBlank(json.get())) {
+            return new ArrayList<>();
+        }
+        try {
+            HealthCheckRecord[] records = GSON.fromJson(json.get(), HealthCheckRecord[].class);
+            if (records == null) {
+                return new ArrayList<>();
+            }
+            return new ArrayList<>(Arrays.asList(records));
+        } catch (Exception ignored) {
+            return new ArrayList<>();
+        }
+    }
+
+    private HealthCheckRecord record(HealthCheckResult result) {
+        HealthCheckRecord record = new HealthCheckRecord();
+        record.checkedAt = result.checkedAt;
+        record.score = result.score;
+        record.status = status(result);
+        record.issueCount = safeIssues(result).size();
+        record.articleCount = result.articleCount;
+        record.publishedArticleCount = result.publishedArticleCount;
+        record.crawledPageCount = result.crawledPageCount;
+        record.crawlFailedPageCount = result.crawlFailedPageCount;
+        record.brokenLinkCount = result.brokenLinkCount;
+        record.seoIssueCount = result.seoIssueCount;
+        record.routeIssueCount = result.routeIssueCount;
+        record.siteConfigIssueCount = result.siteConfigIssueCount;
+        record.publicOutputIssueCount = result.publicOutputIssueCount;
+        record.databaseFragmentLabel = result.databaseFragmentLabel;
+        return record;
+    }
+
     public Map<String, Object> surfaceData() {
         return surfaceData(readLastResult().orElse(null));
     }
 
     public Map<String, Object> surfaceData(HealthCheckResult result) {
         Map<String, Object> surface = new LinkedHashMap<>();
+        List<HealthCheckRecord> records = readRecords();
         surface.put("version", "1.0");
         surface.put("title", "站点检查");
         surface.put("view", view("打开插件", "index", "index"));
         surface.put("actions", surfaceActions(result));
+        surface.put("records", records);
         if (result == null) {
             surface.put("description", "尚未执行检查。控制台加载时不会自动扫描。");
             surface.put("status", "normal");
             surface.put("metrics", Arrays.asList(
                     metric("状态", "未检查"),
                     metric("扫描", "手动触发"),
-                    metric("范围", "文章 / SEO / 公开输出 / 数据库 / 目录")
+                    metric("记录", records.size()),
+                    metric("范围", "页面抓取 / SEO / 文章资源 / 公开输出 / 数据库")
             ));
             surface.put("items", Collections.singletonList(item("idle", "等待手动检查",
-                    "点击“立即检查”后才会扫描站点内容和运行环境。", "normal", Collections.emptyList())));
+                    "点击“立即检查”后才会抓取公开页面并分析基础 SEO 信息。", "normal", Collections.emptyList())));
             return surface;
         }
         List<HealthCheckIssue> issues = safeIssues(result);
@@ -187,10 +261,13 @@ public class SiteCheckService {
         surface.put("metrics", Arrays.asList(
                 metric("得分", result.score + "/100"),
                 metric("文章", result.publishedArticleCount + "/" + result.articleCount),
+                metric("页面", result.crawledPageCount + "/" + (result.crawledPageCount + result.crawlFailedPageCount)),
                 metric("问题", issues.size()),
                 metric("死链", result.brokenLinkCount),
                 metric("SEO 缺失", result.seoIssueCount),
+                metric("站点配置", result.siteConfigIssueCount),
                 metric("公开输出", result.publicOutputIssueCount),
+                metric("记录", records.size()),
                 metric("数据库", result.databaseFragmentLabel)
         ));
         surface.put("items", surfaceItems(result));
@@ -259,6 +336,22 @@ public class SiteCheckService {
                 return "站点描述缺失";
             case "websiteSeoKeywordsMissing":
                 return "站点关键词缺失";
+            case "pageTitleMissing":
+                return "页面 title 缺失";
+            case "pageDescriptionMissing":
+                return "meta description 缺失";
+            case "pageCanonicalMissing":
+                return "canonical 缺失";
+            case "pageH1Missing":
+                return "H1 缺失";
+            case "pageH1Multiple":
+                return "H1 过多";
+            case "pageNoIndex":
+                return "页面声明 noindex";
+            case "pageTitleDuplicate":
+                return "页面 title 重复";
+            case "pageDescriptionDuplicate":
+                return "meta description 重复";
             case "articleSeoDigestMissing":
                 return "文章摘要缺失";
             case "articleSeoKeywordsMissing":
@@ -269,6 +362,10 @@ public class SiteCheckService {
                 return "文章别名重复";
             case "articleAliasNumericCollision":
                 return "文章别名与数字 ID 冲突";
+            case "staticSiteHostMissing":
+                return "静态化开启但主页地址为空";
+            case "staticSiteHostInvalid":
+                return "主页地址不是完整 HTTP/HTTPS 地址";
             case "robotsSitemapMissing":
                 return "robots.txt 缺少 Sitemap";
             case "robotsAdminDisallowMissing":
@@ -372,8 +469,12 @@ public class SiteCheckService {
                 suggestions.add(suggestion("repairBrokenLinks", ARTICLE_ROUTE));
             } else if ("seoMissing".equals(issue.key)) {
                 suggestions.add(suggestion("completeSeo", notBlank(issue.actionRoute) ? issue.actionRoute : ARTICLE_ROUTE));
+            } else if ("pageCrawlFailed".equals(issue.key) || "pageCrawlUnavailable".equals(issue.key)) {
+                suggestions.add(suggestion("reviewSiteHost", WEBSITE_BLOG_ROUTE));
             } else if ("articleRoute".equals(issue.key)) {
                 suggestions.add(suggestion("repairArticleRoute", ARTICLE_ROUTE));
+            } else if ("staticSiteConfig".equals(issue.key)) {
+                suggestions.add(suggestion("reviewStaticSiteConfig", WEBSITE_BLOG_ROUTE));
             } else if ("robotsPolicy".equals(issue.key)) {
                 suggestions.add(suggestion("reviewRobotsPolicy", WEBSITE_OTHER_ROUTE));
             } else if ("publicOutput".equals(issue.key)) {
@@ -415,6 +516,7 @@ public class SiteCheckService {
             addSample(seoSamples, "websiteSeoKeywordsMissing", "");
         }
 
+        boolean staticHtml = toBoolean(websiteInfo.get("generator_html_status"));
         List<Map<String, Object>> rows = SiteCheckDatabase.queryList(session,
                 "select logId, title, alias, content, markdown, digest, keywords, privacy, thumbnail from log where rubbish = ?", false);
         long articleCount = rows.size();
@@ -424,6 +526,7 @@ public class SiteCheckService {
         long routeIssueCount = 0L;
         LinkedHashSet<String> routeIssueSamples = new LinkedHashSet<>();
         Map<String, List<String>> aliasTitles = new LinkedHashMap<>();
+        List<ArticlePageTarget> articleTargets = new ArrayList<>();
         for (Map<String, Object> row : rows) {
             String logId = text(row.get("logId"));
             String articleTitle = text(firstNotEmpty(row.get("title"), row.get("logId")));
@@ -456,6 +559,9 @@ public class SiteCheckService {
                 continue;
             }
             publishedArticleCount++;
+            if (notBlank(alias) && articleTargets.size() < CRAWL_PAGE_LIMIT) {
+                articleTargets.add(new ArticlePageTarget(articleTitle, articlePath(alias, staticHtml)));
+            }
             boolean missingDigest = !notBlank(text(row.get("digest")));
             boolean missingKeywords = !notBlank(text(row.get("keywords")));
             if (missingDigest) {
@@ -476,8 +582,9 @@ public class SiteCheckService {
         }
         return new ArticleHealthScanResult(
                 new BrokenLinkResult(brokenLinkCount, new ArrayList<>(brokenLinkSamples)),
-                new SeoResult(siteMissingCount, articleMissingCount, seoSamples),
+                new SeoResult(siteMissingCount + articleMissingCount, siteMissingCount > 0, seoSamples),
                 new IssueScanResult(routeIssueCount, new ArrayList<>(routeIssueSamples)),
+                articleTargets,
                 articleCount,
                 publishedArticleCount
         );
@@ -485,7 +592,7 @@ public class SiteCheckService {
 
     private Map<String, Object> websiteInfo() throws SQLException {
         Map<String, Object> result = new HashMap<>();
-        List<Map<String, Object>> rows = websiteRows("title", "description", "keywords");
+        List<Map<String, Object>> rows = websiteRows("title", "description", "keywords", "generator_html_status");
         for (Map<String, Object> row : rows) {
             result.put(text(row.get("name")), row.get("value"));
         }
@@ -513,6 +620,179 @@ public class SiteCheckService {
             result.put(text(row.get("name")), row.get("value"));
         }
         return result;
+    }
+
+    private PageCrawlResult crawlSitePages(List<ArticlePageTarget> articleTargets) {
+        String baseUrl = publicBaseUrl();
+        LinkedHashMap<String, String> pages = new LinkedHashMap<>();
+        if (notBlank(baseUrl)) {
+            pages.put(baseUrl, "首页");
+            for (ArticlePageTarget target : articleTargets) {
+                pages.put(joinUrl(baseUrl, target.path), target.title);
+            }
+        }
+        List<HealthCheckSample> seoSamples = new ArrayList<>();
+        LinkedHashSet<String> failureSamples = new LinkedHashSet<>();
+        Map<String, List<String>> titlePages = new LinkedHashMap<>();
+        Map<String, List<String>> descriptionPages = new LinkedHashMap<>();
+        int crawledCount = 0;
+        if (pages.isEmpty()) {
+            addSample(failureSamples, "未获取到站点主页地址");
+            return new PageCrawlResult(new SeoResult(0L, true, seoSamples),
+                    new IssueScanResult(1L, new ArrayList<>(failureSamples)), 0);
+        }
+        for (Map.Entry<String, String> entry : pages.entrySet()) {
+            try {
+                String html = fetchPage(entry.getKey());
+                crawledCount++;
+                inspectPageSeo(entry.getKey(), entry.getValue(), html, seoSamples, titlePages, descriptionPages);
+            } catch (Exception e) {
+                addSample(failureSamples, entry.getKey() + " / " + shortError(e));
+            }
+        }
+        addDuplicateSamples(titlePages, "pageTitleDuplicate", seoSamples);
+        addDuplicateSamples(descriptionPages, "pageDescriptionDuplicate", seoSamples);
+        return new PageCrawlResult(new SeoResult(seoSamples.size(), hasHomeIssue(seoSamples), seoSamples),
+                new IssueScanResult(failureSamples.size(), new ArrayList<>(failureSamples)), crawledCount);
+    }
+
+    private String publicBaseUrl() {
+        String homeUrl = "";
+        try {
+            PublicInfo publicInfo = session.getResponseSync(ContentType.JSON, new HashMap<>(),
+                    ActionType.LOAD_PUBLIC_INFO, PublicInfo.class);
+            if (publicInfo != null) {
+                homeUrl = text(publicInfo.getHomeUrl());
+            }
+        } catch (Exception ignored) {
+            homeUrl = "";
+        }
+        if (!isHttpUrl(homeUrl)) {
+            try {
+                Map<String, Object> info = websiteInfo("host");
+                homeUrl = normalizeHost(text(info.get("host")));
+            } catch (SQLException ignored) {
+                homeUrl = "";
+            }
+        }
+        return trimTrailingSlash(isHttpUrl(homeUrl) ? homeUrl : "");
+    }
+
+    private String normalizeHost(String host) {
+        if (!notBlank(host)) {
+            return "";
+        }
+        if (host.startsWith("http://") || host.startsWith("https://")) {
+            return host;
+        }
+        return "http://" + host;
+    }
+
+    private String articlePath(String alias, boolean staticHtml) {
+        String path = "/" + alias;
+        return staticHtml ? path + ".html" : path;
+    }
+
+    private String fetchPage(String url) {
+        Map<String, String> headers = new HashMap<>();
+        headers.put("User-Agent", "ZrLog SiteCheck/4.0");
+        return HttpClientUtils.sendGetRequest(url, String.class, headers, session, Duration.ofSeconds(12));
+    }
+
+    private void inspectPageSeo(String url, String label, String html, List<HealthCheckSample> seoSamples,
+                                Map<String, List<String>> titlePages, Map<String, List<String>> descriptionPages) {
+        Document document = Jsoup.parse(html, url);
+        boolean homePage = isHomePage(url);
+        String target = notBlank(label) ? label : url;
+        String title = text(document.title());
+        if (!notBlank(title)) {
+            addSample(seoSamples, "pageTitleMissing", target);
+        } else {
+            addGroupedSample(titlePages, title, target);
+        }
+        String description = text(document.selectFirst("meta[name=description]") == null ? ""
+                : document.selectFirst("meta[name=description]").attr("content"));
+        if (!notBlank(description)) {
+            addSample(seoSamples, "pageDescriptionMissing", target);
+        } else {
+            addGroupedSample(descriptionPages, description, target);
+        }
+        Element canonical = document.selectFirst("link[rel=canonical]");
+        if (canonical == null || !notBlank(canonical.attr("href"))) {
+            addSample(seoSamples, "pageCanonicalMissing", target);
+        }
+        int h1Count = document.select("h1").size();
+        if (h1Count == 0) {
+            addSample(seoSamples, "pageH1Missing", target);
+        } else if (h1Count > 1) {
+            addSample(seoSamples, "pageH1Multiple", target);
+        }
+        Element robots = document.selectFirst("meta[name=robots], meta[name=googlebot]");
+        if (robots != null && robots.attr("content").toLowerCase(Locale.ROOT).contains("noindex")) {
+            addSample(seoSamples, "pageNoIndex", target);
+        }
+    }
+
+    private boolean isHomePage(String url) {
+        try {
+            URI uri = new URI(url);
+            String path = text(uri.getPath());
+            return !notBlank(path) || "/".equals(path);
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private void addGroupedSample(Map<String, List<String>> groupedSamples, String value, String target) {
+        groupedSamples.computeIfAbsent(value, ignored -> new ArrayList<>()).add(target);
+    }
+
+    private void addDuplicateSamples(Map<String, List<String>> groupedSamples, String sampleKey,
+                                     List<HealthCheckSample> samples) {
+        for (Map.Entry<String, List<String>> entry : groupedSamples.entrySet()) {
+            if (entry.getValue().size() > 1) {
+                addSample(samples, sampleKey, String.join(", ", entry.getValue()));
+            }
+        }
+    }
+
+    private boolean hasHomeIssue(List<HealthCheckSample> samples) {
+        for (HealthCheckSample sample : samples) {
+            if (!notBlank(sample.target)) {
+                return true;
+            }
+            if ("首页".equals(sample.target)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private String joinUrl(String baseUrl, String path) {
+        if (!notBlank(path)) {
+            return baseUrl;
+        }
+        if (path.startsWith("http://") || path.startsWith("https://")) {
+            return path;
+        }
+        String normalizedPath = path.startsWith("/") ? path : "/" + path;
+        return trimTrailingSlash(baseUrl) + normalizedPath;
+    }
+
+    private String trimTrailingSlash(String value) {
+        String result = text(value);
+        while (result.endsWith("/") && result.length() > 1) {
+            result = result.substring(0, result.length() - 1);
+        }
+        return result;
+    }
+
+    private String shortError(Exception e) {
+        String message = text(e.getMessage());
+        if (!notBlank(message)) {
+            return e.getClass().getSimpleName();
+        }
+        return message.length() > 140 ? message.substring(0, 140) : message;
     }
 
     private long collectHtmlBrokenLocalAssets(String content, LinkedHashSet<String> samples) {
@@ -550,17 +830,51 @@ public class SiteCheckService {
         return file == null || !file.exists();
     }
 
-    private IssueScanResult inspectPublicOutput(long publishedArticleCount) {
+    private IssueScanResult inspectPublicOutput(long publishedArticleCount) throws SQLException {
         if (publishedArticleCount <= 0) {
             return IssueScanResult.empty();
         }
         List<String> samples = new ArrayList<>();
-        File root = staticRoot();
-        for (String fileName : PUBLIC_OUTPUT_FILES) {
-            File file = new File(root, fileName);
-            if (!file.exists() || !file.isFile() || file.length() <= 0) {
-                samples.add(fileName + " / " + sampleText("publicOutputMissing"));
+        Map<String, String> outputPaths = publicOutputPaths();
+        for (Map.Entry<String, String> entry : outputPaths.entrySet()) {
+            File file = staticFile(entry.getValue());
+            if (file == null || !file.exists() || !file.isFile() || file.length() <= 0) {
+                samples.add(entry.getValue() + " / " + sampleText("publicOutputMissing"));
             }
+        }
+        return new IssueScanResult(samples.size(), samples);
+    }
+
+    private Map<String, String> publicOutputPaths() throws SQLException {
+        Map<String, Object> info = websiteInfo("sitemap_uriPath", "rss_uriPath");
+        Map<String, String> outputPaths = new LinkedHashMap<>();
+        outputPaths.put("sitemap", configuredOutputPath(info.get("sitemap_uriPath"), DEFAULT_SITEMAP_URI_PATH));
+        outputPaths.put("rss", configuredOutputPath(info.get("rss_uriPath"), DEFAULT_RSS_URI_PATH));
+        return outputPaths;
+    }
+
+    private String configuredOutputPath(Object value, String defaultPath) {
+        String uriPath = normalizeUrl(text(value));
+        if (!notBlank(uriPath)) {
+            return defaultPath;
+        }
+        if (uriPath.startsWith("http://") || uriPath.startsWith("https://") || uriPath.startsWith("//")) {
+            return defaultPath;
+        }
+        return uriPath.startsWith("/") ? uriPath : "/" + uriPath;
+    }
+
+    private IssueScanResult inspectStaticSiteConfig() throws SQLException {
+        Map<String, Object> info = websiteInfo("generator_html_status", "host");
+        if (!toBoolean(info.get("generator_html_status"))) {
+            return IssueScanResult.empty();
+        }
+        String host = text(info.get("host"));
+        List<String> samples = new ArrayList<>();
+        if (!notBlank(host)) {
+            samples.add(sampleText("staticSiteHostMissing"));
+        } else if (!isHttpUrl(host)) {
+            samples.add(host + " / " + sampleText("staticSiteHostInvalid"));
         }
         return new IssueScanResult(samples.size(), samples);
     }
@@ -593,6 +907,16 @@ public class SiteCheckService {
             }
         }
         return false;
+    }
+
+    private boolean isHttpUrl(String value) {
+        try {
+            URI uri = new URI(value);
+            String scheme = text(uri.getScheme()).toLowerCase(Locale.ROOT);
+            return ("http".equals(scheme) || "https".equals(scheme)) && notBlank(uri.getHost());
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     private File staticFile(String url) {
@@ -828,10 +1152,17 @@ public class SiteCheckService {
         }
     }
 
-    private int buildScore(long brokenLinks, long seoIssues, boolean hasDatabaseFragment, boolean hasDirectoryWritableIssue) {
+    private int buildScore(long brokenLinks, long seoIssues, boolean hasDatabaseFragment, boolean hasDirectoryWritableIssue,
+                           long routeIssues, long publicOutputIssues, long siteConfigIssues, boolean crawlUnavailable) {
         int score = 100;
         score -= Math.min(30, (int) brokenLinks * 5);
         score -= Math.min(25, (int) seoIssues * 3);
+        score -= Math.min(15, (int) routeIssues * 5);
+        score -= Math.min(12, (int) siteConfigIssues * 6);
+        score -= Math.min(8, (int) publicOutputIssues * 2);
+        if (crawlUnavailable) {
+            score -= 12;
+        }
         if (hasDatabaseFragment) {
             score -= 10;
         }
@@ -909,22 +1240,68 @@ public class SiteCheckService {
     private static class ArticleHealthScanResult {
         private final BrokenLinkResult brokenLinks;
         private final SeoResult seo;
+        private final IssueScanResult routeIntegrity;
+        private final List<ArticlePageTarget> articleTargets;
+        private final long articleCount;
+        private final long publishedArticleCount;
 
-        private ArticleHealthScanResult(BrokenLinkResult brokenLinks, SeoResult seo) {
+        private ArticleHealthScanResult(BrokenLinkResult brokenLinks, SeoResult seo, IssueScanResult routeIntegrity,
+                                        List<ArticlePageTarget> articleTargets, long articleCount,
+                                        long publishedArticleCount) {
             this.brokenLinks = brokenLinks;
             this.seo = seo;
+            this.routeIntegrity = routeIntegrity;
+            this.articleTargets = articleTargets;
+            this.articleCount = articleCount;
+            this.publishedArticleCount = publishedArticleCount;
         }
     }
 
     private static class SeoResult {
-        private final long siteMissingCount;
-        private final long articleMissingCount;
+        private final long count;
+        private final boolean hasHomeIssue;
         private final List<HealthCheckSample> samples;
 
-        private SeoResult(long siteMissingCount, long articleMissingCount, List<HealthCheckSample> samples) {
-            this.siteMissingCount = siteMissingCount;
-            this.articleMissingCount = articleMissingCount;
+        private SeoResult(long count, boolean hasHomeIssue, List<HealthCheckSample> samples) {
+            this.count = count;
+            this.hasHomeIssue = hasHomeIssue;
             this.samples = samples;
+        }
+    }
+
+    private static class ArticlePageTarget {
+        private final String title;
+        private final String path;
+
+        private ArticlePageTarget(String title, String path) {
+            this.title = title;
+            this.path = path;
+        }
+    }
+
+    private static class PageCrawlResult {
+        private final SeoResult seo;
+        private final IssueScanResult failure;
+        private final int crawledCount;
+
+        private PageCrawlResult(SeoResult seo, IssueScanResult failure, int crawledCount) {
+            this.seo = seo;
+            this.failure = failure;
+            this.crawledCount = crawledCount;
+        }
+    }
+
+    private static class IssueScanResult {
+        private final long count;
+        private final List<String> samples;
+
+        private IssueScanResult(long count, List<String> samples) {
+            this.count = count;
+            this.samples = samples;
+        }
+
+        private static IssueScanResult empty() {
+            return new IssueScanResult(0L, Collections.emptyList());
         }
     }
 
@@ -965,8 +1342,15 @@ public class SiteCheckService {
     public static class HealthCheckResult {
         public long checkedAt;
         public int score;
+        public long articleCount;
+        public long publishedArticleCount;
+        public int crawledPageCount;
+        public long crawlFailedPageCount;
         public long brokenLinkCount;
         public long seoIssueCount;
+        public long routeIssueCount;
+        public long siteConfigIssueCount;
+        public long publicOutputIssueCount;
         public long databaseFragmentValue;
         public String databaseFragmentLabel;
         public String databaseEngine;
@@ -975,6 +1359,23 @@ public class SiteCheckService {
         public String databaseOptimizeUnsupportedReason;
         public List<HealthCheckIssue> issues;
         public List<HealthCheckSuggestion> suggestions;
+    }
+
+    public static class HealthCheckRecord {
+        public long checkedAt;
+        public int score;
+        public String status;
+        public int issueCount;
+        public long articleCount;
+        public long publishedArticleCount;
+        public int crawledPageCount;
+        public long crawlFailedPageCount;
+        public long brokenLinkCount;
+        public long seoIssueCount;
+        public long routeIssueCount;
+        public long siteConfigIssueCount;
+        public long publicOutputIssueCount;
+        public String databaseFragmentLabel;
     }
 
     public static class HealthCheckIssue {

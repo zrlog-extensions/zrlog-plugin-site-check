@@ -32,11 +32,14 @@ public class SiteCheckController {
     }
 
     public void index() {
-        session.responseHtml("/templates/index", new HashMap<>(), requestPacket.getMethodStr(), requestPacket.getMsgId());
+        Map<String, Object> data = new HashMap<>();
+        data.put("theme", requestInfo.isDarkMode() ? "dark" : "light");
+        data.put("data", gson.toJson(pageData()));
+        session.responseHtml("/templates/index", data, requestPacket.getMethodStr(), requestPacket.getMsgId());
     }
 
     public void json() {
-        surface();
+        response(successMap(pageData()));
     }
 
     public void surface() {
@@ -100,6 +103,15 @@ public class SiteCheckController {
             return new HashMap<>();
         }
         return requestInfo.simpleParam();
+    }
+
+    private Map<String, Object> pageData() {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("dark", requestInfo.isDarkMode());
+        data.put("adminColorPrimary", requestInfo.getAdminColorPrimary());
+        data.put("plugin", session.getPlugin());
+        data.put("surface", new SiteCheckService(session).surfaceData());
+        return data;
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})

@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>${_plugin.name}</title>
+</head>
+<style>
+    body {
+        margin: 0;
+        font-size: 16px;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
+        font-variant: tabular-nums;
+        line-height: 1.5;
+        font-feature-settings: 'tnum';
+    }
+
+    .dark {
+        background-color: #141414;
+        color: #dfdfdf;
+    }
+</style>
+<body class="${theme}">
+<noscript>You need to enable JavaScript to run this app.</noscript>
+<div id="app"></div>
+<pre id="pluginInfo" style="display: none">${data}</pre>
+</body>
+</html>

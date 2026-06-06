@@ -9,6 +9,8 @@ import com.zrlog.plugin.common.SessionKvRepository;
 import com.zrlog.plugin.common.model.BlogRunTime;
 import com.zrlog.plugin.common.model.PublicInfo;
 import com.zrlog.plugin.data.codec.ContentType;
+import com.zrlog.plugin.data.codec.MsgPacket;
+import com.zrlog.plugin.message.SchedulerQueryResult;
 import com.zrlog.plugin.type.ActionType;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
@@ -57,6 +59,11 @@ public class SiteCheckService {
     private static final Pattern MARKDOWN_LINK_PATTERN = Pattern.compile("!?\\[[^\\]]*]\\(([^)\\s]+)(?:\\s+\"[^\"]*\")?\\)");
     private static final String DEFAULT_SITEMAP_URI_PATH = "/sitemap.xml";
     private static final String DEFAULT_RSS_URI_PATH = "/rss.xml";
+    private static final Duration STANDARD_DISTRIBUTION_QUERY_TIMEOUT = Duration.ofSeconds(5);
+    private static final List<StandardDistributionPluginSpec> STANDARD_DISTRIBUTION_PLUGINS = Arrays.asList(
+            new StandardDistributionPluginSpec("RSS", "rss.refreshFeed", "rss.refreshCache"),
+            new StandardDistributionPluginSpec("Sitemap", "sitemap.refreshSitemap", "sitemap.refreshCache")
+    );
     private static final Gson GSON = new Gson();
 
     private final IOSession session;
@@ -80,6 +87,7 @@ public class SiteCheckService {
         IssueScanResult robotPolicyResult = inspectRobotPolicy();
         DatabaseFragmentResult databaseFragmentResult = inspectDatabaseFragment();
         DirectoryWritableResult directoryWritableResult = inspectDirectoryWritable();
+        StandardDistributionPluginHealthResult standardDistributionPluginHealthResult = inspectStandardDistributionPlugins();
 
         List<HealthCheckIssue> issues = new ArrayList<>();
         if (brokenLinkResult.count > 0) {
@@ -131,6 +139,7 @@ public class SiteCheckService {
                     directoryWritableResult.samples, Collections.emptyList(), "availability", SYSTEM_ROUTE,
                     "目录写入权限异常", "静态目录或插件临时目录无法正常创建、写入或删除文件。"));
         }
+        appendStandardDistributionPluginHealth(standardDistributionPluginHealthResult, issues);
 
         int score = buildScore(
                 brokenLinkResult.count,
@@ -140,7 +149,8 @@ public class SiteCheckService {
                 routeIntegrityResult.count,
                 publicOutputResult.count + robotPolicyResult.count,
                 staticSiteConfigResult.count,
-                pageCrawlResult.crawledCount == 0 && pageCrawlResult.failure.count > 0
+                pageCrawlResult.crawledCount == 0 && pageCrawlResult.failure.count > 0,
+                standardDistributionPluginHealthResult.warningCount()
         );
         HealthCheckResult result = new HealthCheckResult();
         result.checkedAt = System.currentTimeMillis();
@@ -154,6 +164,7 @@ public class SiteCheckService {
         result.routeIssueCount = routeIntegrityResult.count;
         result.siteConfigIssueCount = staticSiteConfigResult.count;
         result.publicOutputIssueCount = publicOutputResult.count + robotPolicyResult.count;
+        result.standardDistributionIssueCount = standardDistributionPluginHealthResult.warningCount();
         result.databaseFragmentValue = databaseFragmentResult.fragmentValue;
         result.databaseFragmentLabel = databaseFragmentResult.fragmentLabel;
         result.databaseEngine = databaseFragmentResult.engineLabel;
@@ -246,6 +257,7 @@ public class SiteCheckService {
         record.routeIssueCount = result.routeIssueCount;
         record.siteConfigIssueCount = result.siteConfigIssueCount;
         record.publicOutputIssueCount = result.publicOutputIssueCount;
+        record.standardDistributionIssueCount = result.standardDistributionIssueCount;
         record.databaseFragmentLabel = result.databaseFragmentLabel;
         return record;
     }
@@ -288,9 +300,10 @@ public class SiteCheckService {
                 metric("死链", result.brokenLinkCount),
                 metric("SEO 缺失", result.seoIssueCount),
                 metric("站点配置", result.siteConfigIssueCount),
-                metric("公开输出", result.publicOutputIssueCount),
-                metric("记录", records.size()),
-                metric("数据库", result.databaseFragmentLabel)
+                    metric("公开输出", result.publicOutputIssueCount),
+                    metric("标准插件", result.standardDistributionIssueCount),
+                    metric("记录", records.size()),
+                    metric("数据库", result.databaseFragmentLabel)
         ));
         surface.put("items", surfaceItems(result));
         return surface;
@@ -408,6 +421,14 @@ public class SiteCheckService {
                 return "robots.txt 未保护后台路径";
             case "publicOutputMissing":
                 return "公开输出文件缺失";
+            case "standardDistributionScheduleMissing":
+                return "标准分发插件调度缺失";
+            case "standardDistributionScheduleInactive":
+                return "标准分发插件调度停用";
+            case "standardDistributionRecentRunMissing":
+                return "标准分发插件缺少最近运行记录";
+            case "standardDistributionRuntimeUnavailable":
+                return "标准分发插件运行态不可查询";
             default:
                 return key;
         }
@@ -515,6 +536,8 @@ public class SiteCheckService {
                 suggestions.add(suggestion("reviewRobotsPolicy", WEBSITE_OTHER_ROUTE));
             } else if ("publicOutput".equals(issue.key)) {
                 suggestions.add(suggestion("reviewPublicOutputPlugins", PLUGIN_ROUTE));
+            } else if (issue.key != null && issue.key.startsWith("standardDistribution")) {
+                suggestions.add(suggestion("reviewStandardDistributionPlugins", PLUGIN_ROUTE));
             } else if ("databaseFragment".equals(issue.key)) {
                 suggestions.add(suggestion("databaseOptimize", null));
             } else if ("directoryWritable".equals(issue.key)) {
@@ -532,6 +555,64 @@ public class SiteCheckService {
         suggestion.key = key;
         suggestion.actionRoute = actionRoute;
         return suggestion;
+    }
+
+    private void appendStandardDistributionPluginHealth(StandardDistributionPluginHealthResult result,
+                                                        List<HealthCheckIssue> issues) {
+        appendStandardDistributionIssue(issues, "standardDistributionRuntimeUnavailable", "info",
+                result.runtimeUnavailableSamples,
+                "标准分发插件运行态不可查询",
+                "无法确认 RSS 或 Sitemap 的刷新调度状态，通常是运行态接口未就绪或插件未接入调度中心。");
+        appendStandardDistributionIssue(issues, "standardDistributionScheduleMissing", "warning",
+                result.missingScheduleSamples,
+                "标准分发插件调度缺失",
+                "RSS 或 Sitemap 的定时刷新能力没有可查询的自动化配置，公开分发文件可能不会自动更新。");
+        appendStandardDistributionIssue(issues, "standardDistributionScheduleInactive", "warning",
+                result.inactiveScheduleSamples,
+                "标准分发插件调度已停用",
+                "RSS 或 Sitemap 的定时刷新能力存在但未启用，公开分发文件不会按计划更新。");
+        appendStandardDistributionIssue(issues, "standardDistributionRecentRunMissing", "info",
+                result.recentRunMissingSamples,
+                "标准分发插件缺少最近运行记录",
+                "RSS 或 Sitemap 的定时刷新能力尚未产生最近运行记录，建议确认调度中心是否正常触发。");
+    }
+
+    private void appendStandardDistributionIssue(List<HealthCheckIssue> issues, String key, String severity,
+                                                 List<String> samples, String title, String detail) {
+        if (samples.isEmpty()) {
+            return;
+        }
+        issues.add(issue(key, severity, samples.size(), samples, Collections.emptyList(), "search",
+                PLUGIN_ROUTE, title, detail));
+    }
+
+    private StandardDistributionPluginHealthResult inspectStandardDistributionPlugins() {
+        StandardDistributionPluginHealthResult result = new StandardDistributionPluginHealthResult();
+        for (StandardDistributionPluginSpec spec : STANDARD_DISTRIBUTION_PLUGINS) {
+            inspectStandardDistributionSchedule(spec, result);
+        }
+        return result;
+    }
+
+    private void inspectStandardDistributionSchedule(StandardDistributionPluginSpec spec,
+                                                     StandardDistributionPluginHealthResult result) {
+        try {
+            int msgId = session.querySchedule(spec.scheduledCapabilityKey);
+            MsgPacket response = session.getResponseMsgPacketByMsgId(msgId, STANDARD_DISTRIBUTION_QUERY_TIMEOUT);
+            SchedulerQueryResult queryResult = GSON.fromJson(response.getDataStr(), SchedulerQueryResult.class);
+            if (queryResult == null || !queryResult.isSuccess()) {
+                result.missingScheduleSamples.add(spec.label + "：" + spec.scheduledCapabilityKey + " 未创建调度");
+                return;
+            }
+            if (!Boolean.TRUE.equals(queryResult.getEnabled())) {
+                result.inactiveScheduleSamples.add(spec.label + "：" + spec.scheduledCapabilityKey + " 已停用");
+            }
+            if (!notBlank(queryResult.getLastRunAt())) {
+                result.recentRunMissingSamples.add(spec.label + "：" + spec.scheduledCapabilityKey + " 暂无最近运行记录");
+            }
+        } catch (Exception e) {
+            result.runtimeUnavailableSamples.add(spec.label + "：" + text(e.getClass().getSimpleName()));
+        }
     }
 
     private ArticleHealthScanResult scanArticleHealth(SiteCheckConfig config) throws SQLException {
@@ -1295,13 +1376,15 @@ public class SiteCheckService {
     }
 
     private int buildScore(long brokenLinks, long seoIssues, boolean hasDatabaseFragment, boolean hasDirectoryWritableIssue,
-                           long routeIssues, long publicOutputIssues, long siteConfigIssues, boolean crawlUnavailable) {
+                           long routeIssues, long publicOutputIssues, long siteConfigIssues, boolean crawlUnavailable,
+                           long standardDistributionIssues) {
         int score = 100;
         score -= Math.min(30, (int) brokenLinks * 5);
         score -= Math.min(25, (int) seoIssues * 3);
         score -= Math.min(15, (int) routeIssues * 5);
         score -= Math.min(12, (int) siteConfigIssues * 6);
         score -= Math.min(8, (int) publicOutputIssues * 2);
+        score -= Math.min(10, (int) standardDistributionIssues * 3);
         if (crawlUnavailable) {
             score -= 12;
         }
@@ -1481,6 +1564,31 @@ public class SiteCheckService {
         }
     }
 
+    private static class StandardDistributionPluginSpec {
+        private final String label;
+        private final String scheduledCapabilityKey;
+        private final String eventCapabilityKey;
+
+        private StandardDistributionPluginSpec(String label, String scheduledCapabilityKey, String eventCapabilityKey) {
+            this.label = label;
+            this.scheduledCapabilityKey = scheduledCapabilityKey;
+            this.eventCapabilityKey = eventCapabilityKey;
+        }
+    }
+
+    private static class StandardDistributionPluginHealthResult {
+        private final List<String> runtimeUnavailableSamples = new ArrayList<>();
+        private final List<String> missingScheduleSamples = new ArrayList<>();
+        private final List<String> inactiveScheduleSamples = new ArrayList<>();
+        private final List<String> recentRunMissingSamples = new ArrayList<>();
+
+        private long warningCount() {
+            return missingScheduleSamples.size()
+                    + inactiveScheduleSamples.size()
+                    + recentRunMissingSamples.size();
+        }
+    }
+
     public static class HealthCheckResult {
         public long checkedAt;
         public int score;
@@ -1493,6 +1601,7 @@ public class SiteCheckService {
         public long routeIssueCount;
         public long siteConfigIssueCount;
         public long publicOutputIssueCount;
+        public long standardDistributionIssueCount;
         public long databaseFragmentValue;
         public String databaseFragmentLabel;
         public String databaseEngine;
@@ -1517,6 +1626,7 @@ public class SiteCheckService {
         public long routeIssueCount;
         public long siteConfigIssueCount;
         public long publicOutputIssueCount;
+        public long standardDistributionIssueCount;
         public String databaseFragmentLabel;
     }
 

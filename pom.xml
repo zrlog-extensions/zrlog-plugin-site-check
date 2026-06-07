@@ -68,8 +68,21 @@
                     <include>**/**</include>
                 </includes>
             </resource>
+            <resource>
+                <directory>target/generated-resources/plugin-info</directory>
+                <includes>
+                    <include>plugin.properties</include>
+                </includes>
+            </resource>
         </resources>
         <plugins>
+            <plugin>
+                <artifactId>maven-resources-plugin</artifactId>
+                <version>2.6</version>
+                <configuration>
+                    <overwrite>true</overwrite>
+                </configuration>
+            </plugin>
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>

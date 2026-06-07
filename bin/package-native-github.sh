@@ -4,10 +4,15 @@ mkdir -p "${basePath}"
 echo "real target folder ${basePath}"
 
 java -version
-sh bin/build-info.sh
-./mvnw ${2} -PnodeBuild clean package
-./mvnw ${2} -Pnative -DskipNativeTests -Dagent exec:exec@java-agent -U
-./mvnw ${2} -Pnative -DskipNativeTests package
+mvnArgs=()
+if [ $# -ge 2 ] && [ -n "${2}" ]; then
+  mvnArgs=("${2}")
+fi
+./mvnw "${mvnArgs[@]}" clean
+bash -e bin/build-info.sh "${basePath}"
+./mvnw "${mvnArgs[@]}" -PnodeBuild package
+./mvnw "${mvnArgs[@]}" -Pnative -DskipNativeTests -Dagent exec:exec@java-agent -U
+./mvnw "${mvnArgs[@]}" -Pnative -DskipNativeTests package
 binName="site-check"
 targetFile=""
 sourceFile=""

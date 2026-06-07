@@ -25,7 +25,8 @@ jobs:
           cache: 'maven'
       - name: Build with Maven
         run: |
-          mkdir -p /tmp/download
-          bash -e bin/build-info.sh
-          bash -e ./mvnw -PnodeBuild clean package assembly:single -DoutputDirectory=/tmp/download/plugin
-          bash bin/upload-bin.sh ${{ secrets.SECRET_ID }} ${{ secrets.SECRET_KEY }} ${{ secrets.BUCKET }} /tmp/download plugin ${{ secrets.HOST }}
+          mkdir -p /tmp/download/plugin
+          bash -e ./mvnw clean
+          bash -e bin/build-info.sh /tmp/download/plugin
+          bash -e ./mvnw -PnodeBuild package assembly:single -DoutputDirectory=/tmp/download/plugin
+          bash -e bin/upload-bin.sh ${{ secrets.SECRET_ID }} ${{ secrets.SECRET_KEY }} ${{ secrets.BUCKET }} /tmp/download plugin ${{ secrets.HOST }}

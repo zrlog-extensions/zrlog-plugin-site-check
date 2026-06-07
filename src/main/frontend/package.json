@@ -16,7 +16,7 @@
   },
   "scripts": {
     "start": "react-scripts start",
-    "build": "GENERATE_SOURCEMAP=false react-scripts build && node scripts/inline-build.js",
+    "build": "GENERATE_SOURCEMAP=false react-scripts build && node scripts/plugin-static-path.js",
     "test": "react-scripts test",
     "type-check": "tsc --noEmit"
   },

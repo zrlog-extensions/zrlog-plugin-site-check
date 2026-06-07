@@ -34,7 +34,7 @@ public class SiteCheckController {
     public void index() {
         Map<String, Object> data = new HashMap<>();
         data.put("theme", requestInfo.isDarkMode() ? "dark" : "light");
-        data.put("data", gson.toJson(pageData()));
+        data.put("data", gson.toJson(successMap(pageData())));
         session.responseHtml("/templates/index", data, requestPacket.getMethodStr(), requestPacket.getMsgId());
     }
 

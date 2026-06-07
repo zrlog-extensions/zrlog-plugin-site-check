@@ -7,3 +7,4 @@ node_modules/
 yarn-error.log
 src/main/frontend/build/
 src/main/frontend/tsconfig.tsbuildinfo
+src/main/resources/templates

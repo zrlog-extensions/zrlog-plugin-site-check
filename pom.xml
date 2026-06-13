@@ -189,6 +189,7 @@
                                     -H:+BuildReport
                                     -H:+UnlockExperimentalVMOptions
                                     --allow-incomplete-classpath
+                                    -H:-ReduceImplicitExceptionStackTraceInformation
                                     -march=compatibility
                                     --enable-preview
                                     -H:DashboardDump=${imageName}

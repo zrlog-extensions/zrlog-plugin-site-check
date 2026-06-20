@@ -291,7 +291,7 @@ const SiteCheckIndex: FunctionComponent<SiteCheckIndexProps> = ({data}) => {
             <TopBar>
                 <div>
                     <Title>站点检查</Title>
-                    <SubTitle $token={token}>从 admin-web 健康检查迁出的站点体检能力，检查文章资源、SEO、公开页面、输出文件、数据库和目录权限。</SubTitle>
+                    <SubTitle $token={token}>检查公开页面、文章资源、SEO、生成文件、数据库和目录权限。</SubTitle>
                 </div>
                 <Space size={8} wrap>
                     <Button icon={<ReloadOutlined/>} onClick={load} loading={loading}>刷新</Button>

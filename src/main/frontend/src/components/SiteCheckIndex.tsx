@@ -188,11 +188,11 @@ const sampleText = (sample: HealthCheckSample) => {
 const databaseOptimizeUnsupportedReason = (reason?: string) => {
     switch (reason) {
         case "remoteWebApi":
-            return "WebAPI / D1 数据源不支持插件直接维护数据库。";
+            return "WebAPI / D1 数据源不支持插件直接维护数据库";
         case "unsupportedEngine":
-            return "当前数据库类型不支持插件自动维护。";
+            return "当前数据库类型不支持插件自动维护";
         case "unavailable":
-            return "当前无法读取数据库连接信息。";
+            return "当前无法读取数据库连接信息";
         default:
             return undefined;
     }
@@ -291,7 +291,7 @@ const SiteCheckIndex: FunctionComponent<SiteCheckIndexProps> = ({data}) => {
             <TopBar>
                 <div>
                     <Title>站点检查</Title>
-                    <SubTitle $token={token}>检查公开页面、文章资源、SEO、生成文件、数据库和目录权限。</SubTitle>
+                    <SubTitle $token={token}>检查公开页面、文章资源、SEO、生成文件、数据库和目录权限</SubTitle>
                 </div>
                 <Space size={8} wrap>
                     <Button icon={<ReloadOutlined/>} onClick={load} loading={loading}>刷新</Button>
@@ -341,7 +341,7 @@ const SiteCheckIndex: FunctionComponent<SiteCheckIndexProps> = ({data}) => {
                         }
                     />
                 ) : (
-                    <Alert type="info" showIcon message="尚未执行检查" description="点击“立即检查”后才会抓取公开页面并生成站点健康报告。"/>
+                    <Alert type="info" showIcon message="尚未执行检查" description="点击“立即检查”后才会抓取公开页面并生成站点健康报告"/>
                 )}
 
                 <ContentGrid>

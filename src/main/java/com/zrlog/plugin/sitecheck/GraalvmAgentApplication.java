@@ -2,7 +2,11 @@ package com.zrlog.plugin.sitecheck;
 
 import com.zrlog.plugin.RunConstants;
 import com.zrlog.plugin.common.PluginNativeImageUtils;
+import com.zrlog.plugin.sitecheck.controller.SiteCheckActionRequest;
+import com.zrlog.plugin.sitecheck.controller.SiteCheckActionResponse;
+import com.zrlog.plugin.sitecheck.controller.SiteCheckApiResponse;
 import com.zrlog.plugin.sitecheck.controller.SiteCheckController;
+import com.zrlog.plugin.sitecheck.controller.SiteCheckPageData;
 import com.zrlog.plugin.sitecheck.service.SiteCheckConfig;
 import com.zrlog.plugin.sitecheck.service.SiteCheckService;
 import com.zrlog.plugin.type.RunType;
@@ -18,6 +22,10 @@ public class GraalvmAgentApplication {
         RunConstants.runType = RunType.AGENT;
         PluginNativeImageUtils.usedGsonObject();
         PluginNativeImageUtils.gsonNativeAgentByClazz(Arrays.asList(
+                SiteCheckActionRequest.class,
+                SiteCheckActionResponse.class,
+                SiteCheckApiResponse.class,
+                SiteCheckPageData.class,
                 SiteCheckService.HealthCheckResult.class,
                 SiteCheckService.HealthCheckRecord.class,
                 SiteCheckService.HealthCheckIssue.class,

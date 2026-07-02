@@ -11,7 +11,6 @@ import com.zrlog.plugin.sitecheck.service.SiteCheckService.HealthCheckResult;
 
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.Map;
 
 public class SiteCheckController {
@@ -34,44 +33,45 @@ public class SiteCheckController {
     public void index() {
         Map<String, Object> data = new HashMap<>();
         data.put("theme", requestInfo.isDarkMode() ? "dark" : "light");
-        data.put("data", gson.toJson(successMap(pageData())));
+        data.put("data", gson.toJson(SiteCheckApiResponse.success(pageData())));
         session.responseHtml("/templates/index", data, requestPacket.getMethodStr(), requestPacket.getMsgId());
     }
 
     public void json() {
-        response(successMap(pageData()));
+        response(SiteCheckApiResponse.success(pageData()));
     }
 
     public void surface() {
-        response(successMap(new SiteCheckService(session).surfaceData()));
+        response(SiteCheckApiResponse.success(new SiteCheckService(session).surfaceData()));
     }
 
     public void surfaceAction() {
-        String actionRef = stringValue(params().get("actionRef"));
+        SiteCheckActionRequest params = params();
+        String actionRef = stringValue(params.getActionRef());
         SiteCheckService service = new SiteCheckService(session);
         try {
             if (ACTION_RUN.equals(actionRef)) {
                 HealthCheckResult result = service.check();
                 service.saveLastResult(result);
-                response(successMap(actionResult("检查完成", service.surfaceData(result))));
+                response(SiteCheckApiResponse.success(new SiteCheckActionResponse("检查完成", service.surfaceData(result))));
                 return;
             }
             if (ACTION_OPTIMIZE.equals(actionRef)) {
                 HealthCheckResult result = service.optimizeDatabase();
                 service.saveLastResult(result);
-                response(successMap(actionResult(
+                response(SiteCheckApiResponse.success(new SiteCheckActionResponse(
                         result.canOptimizeDatabase ? "数据库维护已执行，检查结果已刷新" : "当前数据库不支持插件维护，检查结果已刷新",
                         service.surfaceData(result))));
                 return;
             }
             if (ACTION_SETTINGS.equals(actionRef)) {
-                service.saveConfig(values(params().get("values")));
-                response(successMap(actionResult("检查设置已保存", service.surfaceData())));
+                service.saveConfig(params.getValues());
+                response(SiteCheckApiResponse.success(new SiteCheckActionResponse("检查设置已保存", service.surfaceData())));
                 return;
             }
-            response(errorMap("未知操作"));
+            response(SiteCheckApiResponse.error("未知操作"));
         } catch (Exception e) {
-            response(errorMap(actionErrorPrefix(actionRef) + e.getMessage()));
+            response(SiteCheckApiResponse.error(actionErrorPrefix(actionRef) + e.getMessage()));
         }
     }
 
@@ -85,86 +85,41 @@ public class SiteCheckController {
         return "检查失败: ";
     }
 
-    private Map<String, Object> actionResult(String message, Map<String, Object> surface) {
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("message", message);
-        result.put("surface", surface);
-        return result;
-    }
-
-    private Map<String, Object> params() {
+    private SiteCheckActionRequest params() {
         if (requestInfo.getRequestBody() != null && requestInfo.getRequestBody().length > 0) {
             String body = new String(requestInfo.getRequestBody(), StandardCharsets.UTF_8);
             if (body.trim().startsWith("{")) {
-                return gson.fromJson(body, Map.class);
+                SiteCheckActionRequest request = gson.fromJson(body, SiteCheckActionRequest.class);
+                return request == null ? new SiteCheckActionRequest() : request;
             }
         }
-        if (requestInfo.getParam() == null) {
-            return new HashMap<>();
-        }
-        return requestInfo.simpleParam();
+        return SiteCheckActionRequest.fromParams(this::paramObject, gson);
     }
 
-    private Map<String, Object> pageData() {
-        Map<String, Object> data = new LinkedHashMap<>();
-        data.put("dark", requestInfo.isDarkMode());
-        data.put("adminColorPrimary", requestInfo.getAdminColorPrimary());
-        data.put("plugin", session.getPlugin());
-        data.put("surface", new SiteCheckService(session).surfaceData());
+    private Object paramObject(String key) {
+        if (requestInfo.getParam() == null || requestInfo.getParam().get(key) == null || requestInfo.getParam().get(key).length == 0) {
+            return null;
+        }
+        String[] values = requestInfo.getParam().get(key);
+        return values.length == 1 ? values[0] : values;
+    }
+
+    private SiteCheckPageData pageData() {
+        SiteCheckPageData data = new SiteCheckPageData();
+        data.setDark(requestInfo.isDarkMode());
+        data.setAdminColorPrimary(requestInfo.getAdminColorPrimary());
+        data.setPlugin(session.getPlugin());
+        data.setSurface(new SiteCheckService(session).surfaceData());
         return data;
     }
 
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    private Map<String, Object> values(Object raw) {
-        Object value = firstValue(raw);
-        if (value instanceof Map) {
-            return new LinkedHashMap<>((Map) value);
-        }
-        String text = stringValue(value);
-        if (text.startsWith("{")) {
-            Map parsed = gson.fromJson(text, Map.class);
-            return parsed == null ? new LinkedHashMap<>() : new LinkedHashMap<>(parsed);
-        }
-        return new LinkedHashMap<>();
-    }
-
-    private Object firstValue(Object value) {
-        if (value instanceof Iterable) {
-            for (Object item : (Iterable<?>) value) {
-                return item;
-            }
-            return "";
-        }
-        return value;
-    }
-
-    private Map<String, Object> successMap(Object data) {
-        Map<String, Object> map = new LinkedHashMap<>();
-        map.put("success", true);
-        map.put("data", data);
-        return map;
-    }
-
-    private Map<String, Object> errorMap(String message) {
-        Map<String, Object> map = new LinkedHashMap<>();
-        map.put("success", false);
-        map.put("message", notBlank(message) ? message : "操作失败");
-        return map;
-    }
-
-    private void response(Map<String, Object> map) {
-        session.sendMsg(ContentType.JSON, map, requestPacket.getMethodStr(), requestPacket.getMsgId(),
+    private void response(SiteCheckApiResponse<?> response) {
+        session.sendMsg(ContentType.JSON, response, requestPacket.getMethodStr(), requestPacket.getMsgId(),
                 MsgPacketStatus.RESPONSE_SUCCESS);
     }
 
     private String stringValue(Object value) {
         if (value == null) {
-            return "";
-        }
-        if (value instanceof Iterable) {
-            for (Object item : (Iterable<?>) value) {
-                return stringValue(item);
-            }
             return "";
         }
         return String.valueOf(value).trim();

@@ -4,6 +4,7 @@ import com.hibegin.common.dao.DAO;
 import com.hibegin.common.dao.DataSourceWrapperImpl;
 import com.zrlog.plugin.IOSession;
 import com.zrlog.plugin.data.codec.ContentType;
+import com.zrlog.plugin.message.DbPropertiesResponse;
 import com.zrlog.plugin.type.ActionType;
 
 import java.io.File;
@@ -35,8 +36,8 @@ public class SiteCheckDatabase {
             if (configured) {
                 return;
             }
-            Map response = session.getResponseSync(ContentType.JSON, new HashMap<>(), ActionType.GET_DB_PROPERTIES, Map.class);
-            String path = response == null ? "" : Objects.toString(response.get("dbProperties"), "");
+            DbPropertiesResponse response = session.getResponseSync(ContentType.JSON, new HashMap<>(), ActionType.GET_DB_PROPERTIES, DbPropertiesResponse.class);
+            String path = response == null ? "" : Objects.toString(response.getDbProperties(), "");
             if (path.trim().isEmpty()) {
                 throw new IllegalStateException("db.properties path is empty");
             }

@@ -3,7 +3,6 @@ package com.zrlog.plugin.sitecheck.service;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Objects;
 
 public class SiteCheckConfig {
@@ -23,22 +22,6 @@ public class SiteCheckConfig {
 
     public static SiteCheckConfig defaults() {
         return new SiteCheckConfig().normalized();
-    }
-
-    public static SiteCheckConfig fromValues(Map<String, Object> values) {
-        SiteCheckConfig config = defaults();
-        if (values == null || values.isEmpty()) {
-            return config;
-        }
-        config.maxPages = toInt(values.get("maxPages"), config.maxPages);
-        config.timeoutSeconds = toInt(values.get("timeoutSeconds"), config.timeoutSeconds);
-        config.requireCanonical = toBoolean(values.get("requireCanonical"), config.requireCanonical);
-        config.requireH1 = toBoolean(values.get("requireH1"), config.requireH1);
-        config.checkDuplicateMeta = toBoolean(values.get("checkDuplicateMeta"), config.checkDuplicateMeta);
-        config.checkLengthGuidance = toBoolean(values.get("checkLengthGuidance"), config.checkLengthGuidance);
-        config.extraPaths = text(values.get("extraPaths"));
-        config.userAgent = text(values.get("userAgent"));
-        return config.normalized();
     }
 
     public SiteCheckConfig normalized() {
@@ -76,41 +59,6 @@ public class SiteCheckConfig {
             }
         }
         return paths;
-    }
-
-    private static int toInt(Object value, int fallback) {
-        if (value instanceof Number) {
-            return ((Number) value).intValue();
-        }
-        String text = text(value);
-        if (!notBlank(text)) {
-            return fallback;
-        }
-        try {
-            return Integer.parseInt(text);
-        } catch (NumberFormatException ignored) {
-            return fallback;
-        }
-    }
-
-    private static boolean toBoolean(Object value, boolean fallback) {
-        if (value instanceof Boolean) {
-            return (Boolean) value;
-        }
-        if (value instanceof Number) {
-            return ((Number) value).intValue() != 0;
-        }
-        String text = text(value).toLowerCase(Locale.ROOT);
-        if (!notBlank(text)) {
-            return fallback;
-        }
-        if ("true".equals(text) || "1".equals(text) || "yes".equals(text) || "on".equals(text)) {
-            return true;
-        }
-        if ("false".equals(text) || "0".equals(text) || "no".equals(text) || "off".equals(text)) {
-            return false;
-        }
-        return fallback;
     }
 
     private static int clamp(int value, int min, int max) {

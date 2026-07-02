@@ -189,8 +189,8 @@ public class SiteCheckService {
         }
     }
 
-    public SiteCheckConfig saveConfig(Map<String, Object> values) {
-        SiteCheckConfig config = SiteCheckConfig.fromValues(values);
+    public SiteCheckConfig saveConfig(SiteCheckConfig values) {
+        SiteCheckConfig config = values == null ? SiteCheckConfig.defaults() : values.normalized();
         SessionKvRepository.of(session).put(CONFIG_KEY, GSON.toJson(config));
         return config;
     }

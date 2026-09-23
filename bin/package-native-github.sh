@@ -16,23 +16,39 @@ bash -e bin/build-info.sh "${basePath}"
 binName="site-check"
 targetFile=""
 sourceFile=""
+artifactArchitecture=""
 if [ -f "target/${binName}.exe" ];
 then
   echo "window"
   sourceFile="target/${binName}.exe"
-  targetFile="${basePath}/${binName}-Windows-$(uname -m).exe"
-  mv ${sourceFile} ${targetFile}
-  exit 0;
-fi
-if [[ "$(uname -s)" == "Linux" ]];
+  artifactArchitecture="Windows-$(uname -m)"
+  targetFile="${basePath}/${binName}-${artifactArchitecture}.exe"
+elif [[ "$(uname -s)" == "Linux" ]];
 then
   echo "Linux"
   sourceFile="target/${binName}"
-  targetFile="${basePath}/${binName}-$(uname -s)-$(dpkg --print-architecture).bin"
-  mv ${sourceFile} ${targetFile}
+  artifactArchitecture="$(uname -s)-$(dpkg --print-architecture)"
+  targetFile="${basePath}/${binName}-${artifactArchitecture}.bin"
 else
   echo "MacOS"
   sourceFile="target/${binName}"
-  targetFile="${basePath}/${binName}-$(uname -s)-$(uname -m).bin"
-  mv ${sourceFile} ${targetFile}
+  artifactArchitecture="$(uname -s)-$(uname -m)"
+  targetFile="${basePath}/${binName}-${artifactArchitecture}.bin"
+fi
+
+mv "${sourceFile}" "${targetFile}"
+
+if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+  generatedProperties="target/generated-resources/plugin-info/plugin.properties"
+  artifactVersion=$(sed -n 's/^version=//p' "${generatedProperties}" | tr -d '\r')
+  if [[ -z "${artifactVersion}" ]]; then
+    echo "Unable to resolve ${binName} version from ${generatedProperties}" >&2
+    exit 1
+  fi
+  {
+    echo "artifact_file=${targetFile}"
+    echo "artifact_name=${binName}"
+    echo "artifact_version=${artifactVersion}"
+    echo "artifact_architecture=${artifactArchitecture}"
+  } >> "${GITHUB_OUTPUT}"
 fi

@@ -19,7 +19,8 @@ ZrLog 站点检查插件。检查公开页面的 SEO、静态资源、公开接�
 ## 原生制品发布
 
 Linux amd64/arm64 制品在上传前会调用 `zrlog-artifact-service`，通过与 `plugin-core`
-相同的固定版本 `process-artifact` Action 完成压缩和 SHA-256、文件大小校验。
+相同的固定发布版 [`zrlog-process-artifact`](https://github.com/zrlog/zrlog-process-artifact)
+Action（`v1.0.0`，工作流固定完整 SHA）完成压缩和 SHA-256、文件大小校验；接入与故障处理见该仓库 README。
 处理成功后才会生成最终制品的 MD5 并上传；处理失败会停止该平台的发布。
 服务接收的版本号使用 `bin/build-info.sh` 生成的实际插件版本。
 

@@ -25,4 +25,4 @@ Action（`v1.0.1`，工作流固定完整 SHA）完成压缩和 SHA-256、文件
 服务接收的版本号来自 `zrlog-build` 构建脚本生成的 `plugin.properties`。
 
 发布前需要配置 Actions Secret `ARTIFACT_SERVICE_TOKEN`，可在仓库中单独设置，
-或授权该仓库使用同名组织 Secret。服务地址为 `https://webdav.zrlog.com/artifact`。
+或授权该仓库使用同名组织 Secret。在仓库或组织的 Actions Variables 中配置服务地址 `ARTIFACT_SERVICE_URL`。

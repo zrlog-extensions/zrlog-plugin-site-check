@@ -1,31 +1,29 @@
+import Input from "@zrlog/ui/antd/Input";
+import InputNumber from "@zrlog/ui/antd/InputNumber";
+import Switch from "@zrlog/ui/antd/Switch";
+import Tag from "@zrlog/ui/antd/Tag";
+import Typography from "@zrlog/ui/antd/Typography";
+import {useUiApp} from "@zrlog/ui/feedback";
+import LinkOutlined from "@zrlog/ui/icons/link";
+import ReloadOutlined from "@zrlog/ui/icons/refresh";
+import SearchOutlined from "@zrlog/ui/icons/search";
+import SettingOutlined from "@zrlog/ui/icons/settings";
+import ToolOutlined from "@zrlog/ui/icons/settings";
 import {
     Alert,
-    App,
     Button,
     Card,
     Col,
     Empty,
     Form,
     Grid,
-    Input,
-    InputNumber,
     List,
     Row,
     Space,
     Statistic,
-    Switch,
-    Tag,
-    Typography,
     theme,
 } from "antd";
-import {
-    HeartOutlined,
-    LinkOutlined,
-    ReloadOutlined,
-    SearchOutlined,
-    SettingOutlined,
-    ToolOutlined,
-} from "@ant-design/icons";
+import {HeartOutlined} from "@ant-design/icons";
 import axios from "axios";
 import {FunctionComponent, useState} from "react";
 import styled from "styled-components";
@@ -218,7 +216,7 @@ const navigateAdmin = (route?: string) => {
 const SiteCheckIndex: FunctionComponent<SiteCheckIndexProps> = ({data}) => {
     const {token} = theme.useToken();
     const screens = Grid.useBreakpoint();
-    const {message} = App.useApp();
+    const {message} = useUiApp();
     const [surface, setSurface] = useState<SiteCheckSurface>(data.surface);
     const [loading, setLoading] = useState(false);
     const [optimizing, setOptimizing] = useState(false);

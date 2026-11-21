@@ -6,6 +6,7 @@ import com.zrlog.plugin.data.codec.ContentType;
 import com.zrlog.plugin.data.codec.HttpRequestInfo;
 import com.zrlog.plugin.data.codec.MsgPacket;
 import com.zrlog.plugin.data.codec.MsgPacketStatus;
+import com.zrlog.plugin.data.codec.PluginAppearance;
 import com.zrlog.plugin.sitecheck.service.SiteCheckService;
 import com.zrlog.plugin.sitecheck.service.SiteCheckService.HealthCheckResult;
 
@@ -32,7 +33,7 @@ public class SiteCheckController {
 
     public void index() {
         Map<String, Object> data = new HashMap<>();
-        data.put("theme", requestInfo.isDarkMode() ? "dark" : "light");
+
         data.put("data", gson.toJson(SiteCheckApiResponse.success(pageData())));
         session.responseHtml("/templates/index", data, requestPacket.getMethodStr(), requestPacket.getMsgId());
     }
@@ -106,6 +107,7 @@ public class SiteCheckController {
 
     private SiteCheckPageData pageData() {
         SiteCheckPageData data = new SiteCheckPageData();
+        data.setAppearance(PluginAppearance.from(requestInfo));
         data.setDark(requestInfo.isDarkMode());
         data.setAdminColorPrimary(requestInfo.getAdminColorPrimary());
         data.setPlugin(session.getPlugin());

@@ -1,8 +1,12 @@
 package com.zrlog.plugin.sitecheck.controller;
 
+import com.zrlog.plugin.data.codec.PluginAppearance;
+
 import com.zrlog.plugin.message.Plugin;
 
 public class SiteCheckPageData {
+
+    private PluginAppearance appearance;
 
     private boolean dark;
     private String adminColorPrimary;
@@ -39,5 +43,8 @@ public class SiteCheckPageData {
 
     public void setSurface(Object surface) {
         this.surface = surface;
+    }
+    public void setAppearance(PluginAppearance appearance) {
+        this.appearance = appearance;
     }
 }
